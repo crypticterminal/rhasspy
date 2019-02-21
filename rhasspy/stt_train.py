@@ -40,7 +40,7 @@ class SpeechTrainingFailed:
 class DummySpeechTrainer(RhasspyActor):
     '''Passes sentences along'''
     def to_started(self, from_state:str) -> None:
-        self.sentence_casing = self.profile.get('training.sentence_casing', None)
+        self.sentence_casing = self.profile.get('training.sentences.case', None)
         tokenizer = self.profile.get('training.tokenizer', 'regex')
         regex_config = self.profile.get(f'training.{tokenizer}', {})
         self.replace_patterns = regex_config.get('replace', [])
@@ -73,7 +73,7 @@ class PocketsphinxSpeechTrainer(RhasspyActor):
         self.unknown_words:Dict[str, Optional[WordPronunciation]] = {}
         self.waiting_words:List[str] = []
         self.receiver:Optional[ActorAddress] = None
-        self.sentence_casing = self.profile.get('training.sentence_casing', None)
+        self.sentence_casing = self.profile.get('training.sentences.case', None)
         self.dictionary_upper:bool = \
             self.profile.get('speech_to_text.dictionary_upper', False)
 
@@ -143,6 +143,20 @@ class PocketsphinxSpeechTrainer(RhasspyActor):
                     self.send(self.receiver, SpeechTrainingFailed())
                     self.transition('started')
                 else:
+                    # Add guessed pronunciations to main dictionary
+                    unknown_path = self.profile.read_path(
+                        self.profile.get('speech_to_text.pocketsphinx.unknown_words'))
+
+                    if os.path.exists(unknown_path):
+                        dictionary_path = self.profile.write_path(
+                            self.profile.get('speech_to_text.pocketsphinx.dictionary',
+                                            'dictionary.txt'))
+
+                        with open(dictionary_path, 'a') as dictionary_file:
+                            with open(unknown_path, 'r') as unknown_file:
+                                self._logger.debug('Adding unknown word pronunciations to user dictionary')
+                                dictionary_file.write(unknown_file.read())
+
                     # Proceed with training
                     self.transition('writing_sentences')
 
@@ -266,7 +280,7 @@ class PocketsphinxSpeechTrainer(RhasspyActor):
         Optionally balances (repeats) sentences so all intents have the same number.'''
 
         # Repeat sentences so that all intents will contain the same number
-        balance_sentences = self.profile.get('training.balance_sentences', True)
+        balance_sentences = self.profile.get('training.sentences.balance_by_intent', True)
         if balance_sentences:
             # Use least common multiple
             lcm_sentences = lcm(*(len(sents) for sents
@@ -279,13 +293,35 @@ class PocketsphinxSpeechTrainer(RhasspyActor):
             self.profile.get('speech_to_text.sentences_text'))
 
         num_sentences = 0
+        write_sorted = self.profile.get('training.sentences.write_sorted', False)
+        write_weights = self.profile.get('training.sentences.write_weights', True)
+
         with open(sentences_text_path, 'w') as sentences_text_file:
-            for intent_name, intent_sents in sentences_by_intent.items():
-                num_repeats = max(1, lcm_sentences // len(intent_sents))
-                for intent_sent in intent_sents:
-                    for i in range(num_repeats):
-                        print(intent_sent.sentence, file=sentences_text_file)
-                    num_sentences = num_sentences + 1
+            if write_sorted:
+                # Cache sentences and weights
+                sentences_to_write = []
+                for intent_name, intent_sents in sentences_by_intent.items():
+                    num_repeats = max(1, lcm_sentences // len(intent_sents))
+                    for intent_sent in intent_sents:
+                        sentences_to_write.append((num_repeats, intent_sent.sentence))
+
+                # Do sort
+                sentences_to_write = sorted(sentences_to_write, key=lambda x: x[1])
+                for num_repeats, sentence in sentences_to_write:
+                    if write_weights:
+                        print(num_repeats, sentence, file=sentences_text_file)
+                    else:
+                        print(sentence, file=sentences_text_file)
+            else:
+                for intent_name, intent_sents in sentences_by_intent.items():
+                    for intent_sent in intent_sents:
+                        if write_weights:
+                            num_repeats = max(1, lcm_sentences // len(intent_sents))
+                            print(num_repeats, intent_sent.sentence, file=sentences_text_file)
+                        else:
+                            print(intent_sent.sentence, file=sentences_text_file)
+
+                        num_sentences = num_sentences + 1
 
         self._logger.debug('Wrote %s sentence(s) to %s' % (num_sentences, sentences_text_path))
 
@@ -324,7 +360,7 @@ class CommandSpeechTrainer(RhasspyActor):
 
         self.command = [program] + arguments
 
-        self.sentence_casing = self.profile.get('training.sentence_casing', None)
+        self.sentence_casing = self.profile.get('training.sentences.case', '')
         tokenizer = self.profile.get('training.tokenizer', 'regex')
         regex_config = self.profile.get(f'training.{tokenizer}', {})
         self.replace_patterns = regex_config.get('replace', [])

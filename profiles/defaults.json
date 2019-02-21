@@ -118,7 +118,12 @@
         "system": "espeak"
     },
     "training": {
-        "balance_sentences": true,
+        "sentences": {
+            "balance_by_intent": true,
+            "case": "lower",
+            "write_weights": true,
+            "write_sorted": false
+        },
         "regex": {
             "replace": [
                 {
@@ -130,7 +135,6 @@
             ],
             "split": "\\s+"
         },
-        "sentence_casing": "lower",
         "tagged_sentences": "tagged_sentences.md",
         "tokenizer": "regex",
         "unknown_words": {
